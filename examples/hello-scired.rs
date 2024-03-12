@@ -5,7 +5,7 @@ async fn main() -> Result<()> {
     let res_set = client.set("keyku", "waduh".into()).await?;
     println!("got SET response from the server: {:?}", res_set);
 
-    let result = client.get("keykus").await?;
+    let result = client.get("keyku").await?;
 
     println!("got GET response from the server: {:?}", result);
     Ok(())

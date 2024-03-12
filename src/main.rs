@@ -4,6 +4,7 @@ use bytes::Bytes;
 use scylla::{Session, SessionBuilder};
 use anyhow::Result;
 use std::sync::Arc;
+use scylla::frame::response::result;
 use scylla::prepared_statement::PreparedStatement;
 
 #[tokio::main]
@@ -52,12 +53,12 @@ async fn handle_scylla(socket: TcpStream, sess: Arc<Session>, prep_get: Arc<Prep
             Get(cmd) => {
               match sess.execute(&prep_get, (cmd.key().to_string(),)).await { // TODO: change to map?
                     Ok(res) => {
-                        match res.rows.unwrap().first(){
-                            Some(row) => {
-                                let val = row.columns[0].as_ref().unwrap().as_text().unwrap().to_string();
-                                Frame::Bulk(Bytes::from(val))
+                        match res.rows {
+                            Some(rows) => match get_single_val(rows) {
+                                Some(val) => Frame::Bulk(Bytes::from(val)),
+                                None => Frame::Null,
                             }
-                            None=> Frame::Null
+                            None => Frame::Null
                         }
                     },
                     Err(e) => Frame::Error(e.to_string()),
@@ -68,6 +69,13 @@ async fn handle_scylla(socket: TcpStream, sess: Arc<Session>, prep_get: Arc<Prep
         };
         conn.write_frame(&resp).await.unwrap();
     }
+}
+
+// get a single value from a rows
+fn get_single_val(rows: Vec<result::Row>) -> Option<String> {
+    rows.first().map(|row|row.columns[0].as_ref()).flatten()
+        .map(|r|r.as_text()).flatten()
+        .map(|f|f.to_string())
 }
 
 

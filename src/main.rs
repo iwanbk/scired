@@ -1,11 +1,10 @@
-mod scyllamgr;
+mod server;
 
-use tokio::net::{TcpListener, TcpStream};
-use mini_redis::{Connection};
+use tokio::net::{TcpListener};
 use scylla::{Session, SessionBuilder};
 use anyhow::Result;
-use std::sync::Arc;
 use std::time::Duration;
+use server::Scired;
 
 
 // TODO:
@@ -19,40 +18,15 @@ async fn main() -> Result<()> {
         .connection_timeout(Duration::from_secs(2))
         .cluster_metadata_refresh_interval(Duration::from_secs(10))
         .build().await?;
-    let sm = scyllamgr::ScyllaMgr::new(session).await.unwrap();
-    let sm = Arc::new(sm);
 
     let listener = TcpListener::bind("127.0.0.1:6379").await.unwrap();
 
-    loop {
-        let (socket, _) = listener.accept().await.unwrap();
-        let sm = sm.clone();
-        tokio::spawn(async move {
-            handle(socket, sm).await
-        });
+    let sc = Scired::new(session).await.unwrap();
 
-    }
+    sc.run(listener).await;
+    Ok(())
 }
 
-async fn handle(socket: TcpStream, sm: Arc<scyllamgr::ScyllaMgr>) {
-    use mini_redis::Command::{self, Get,Set};
-
-    let mut conn = Connection::new(socket);
-
-    while let Some(frame) = conn.read_frame().await.unwrap() {
-        let resp = match Command::from_frame(frame).unwrap() {
-            Set(cmd) => {
-                let val_str = std::str::from_utf8(&cmd.value()).unwrap();
-                sm.set(cmd.key(),val_str).await
-            }
-            Get(cmd) => {
-                sm.get(cmd.key().to_string()).await
-            }
-            cmd=> panic!("unimplemented command {:?}", cmd),
-        };
-        conn.write_frame(&resp).await.unwrap();
-    }
-}
 
 
 

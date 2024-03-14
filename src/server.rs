@@ -9,13 +9,23 @@ use scylla::statement::Consistency;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::task::JoinSet;
 
+pub struct SciredConfig {
+    pub ops_consistency: OpsConsistency,
+}
+
+pub struct OpsConsistency {
+    pub get: Consistency,
+    pub set: Consistency,
+}
+
 pub struct Scired {
     sess: Arc<Session>,
     ps: HashMap<String, Arc<PreparedStatement>>,
 }
 
+
 impl Scired {
-    pub async fn new(session: Session) -> Result<Scired> {
+    pub async fn new(cfg: SciredConfig, session: Session) -> Result<Scired> {
         let sess = Arc::new(session);
         let mut ps_map = HashMap::new();
 
@@ -23,14 +33,14 @@ impl Scired {
         let mut pg = sess
             .prepare("select value from scired.strings where key=?")
             .await?;
-        pg.set_consistency(Consistency::One); // TODO: make the consisntency level to be configurable
+        pg.set_consistency(cfg.ops_consistency.get);
         ps_map.insert("get".to_string(), Arc::new(pg));
 
         // prepare the set
         let mut ps = sess
             .prepare("insert into scired.strings (key, value) values (?, ?)")
             .await?;
-        ps.set_consistency(Consistency::One); // TODO: make the consisntency level to be configurable
+        ps.set_consistency(cfg.ops_consistency.set);
         ps_map.insert("set".to_string(), Arc::new(ps));
 
 

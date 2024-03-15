@@ -1,4 +1,5 @@
 mod server;
+mod shutdown;
 
 use std::string::ToString;
 use tokio::net::{TcpListener};
@@ -8,8 +9,11 @@ use std::time::Duration;
 use server::Scired;
 use clap::{Parser};
 use config::Config;
+use tokio::sync::{broadcast, mpsc};
 //use serde::{Deserialize, Serialize};
 use crate::server::{SciredConfig,OpsConsistency};
+use tracing::{info, error};
+use tokio::signal;
 
 
 // TODO:
@@ -34,10 +38,53 @@ async fn main() -> Result<()> {
 
     let listener = TcpListener::bind(cli.listen_addr).await.unwrap();
 
-    let sc_config = cfg.build_scired_config();
-    let sc = Scired::new(sc_config, session).await.unwrap();
+    let (notify_shutdown, _) = broadcast::channel(1);
+    let (shutdown_complete_tx, mut shutdown_complete_rx) = mpsc::channel(1);
 
-    sc.run(listener).await;
+    let sc_config = cfg.build_scired_config();
+    let sc = Scired::new(sc_config, session, notify_shutdown, shutdown_complete_tx).await.unwrap();
+
+    //sc.run(listener).await;
+
+    tokio::select! {
+        res = sc.run(listener) => {
+            // If an error is received here, accepting connections from the TCP
+            // listener failed multiple times and the server is giving up and
+            // shutting down.
+            //
+            // Errors encountered when handling individual connections do not
+            // bubble up to this point.
+            if let Err(err) = res {
+                error!(cause = %err, "failed to accept");
+            }
+        }
+        _ = signal::ctrl_c() => {
+            // The shutdown signal has been received.
+            info!("shutting down");
+            println!("shutting down");
+        }
+    }
+
+    // Extract the `shutdown_complete` receiver and transmitter
+    // explicitly drop `shutdown_transmitter`. This is important, as the
+    // `.await` below would otherwise never complete.
+    let Scired {
+        shutdown_complete_tx,
+        notify_shutdown,
+        ..
+    } = sc;
+
+    // When `notify_shutdown` is dropped, all tasks which have `subscribe`d will
+    // receive the shutdown signal and can exit
+    drop(notify_shutdown);
+    // Drop final `Sender` so the `Receiver` below can complete
+    drop(shutdown_complete_tx);
+
+    // Wait for all active connections to finish processing. As the `Sender`
+    // handle held by the listener has been dropped above, the only remaining
+    // `Sender` instances are held by connection handler tasks. When those drop,
+    // the `mpsc` channel will close and `recv()` will return `None`.
+    let _ = shutdown_complete_rx.recv().await;
     Ok(())
 }
 #[derive(Debug)]
